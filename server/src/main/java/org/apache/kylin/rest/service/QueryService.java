@@ -71,6 +71,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
+import java.sql.DriverManager;
+
 /**
  * @author xduo
  */
@@ -332,21 +334,44 @@ public class QueryService extends BasicService {
         List<List<String>> results = new LinkedList<List<String>>();
         List<SelectedColumnMeta> columnMetas = new LinkedList<SelectedColumnMeta>();
 
+        String driverName = "org.apache.hive.jdbc.HiveDriver";
         try {
-            conn = getOLAPDataSource(sqlRequest.getProject()).getConnection();
+        	try {
+                conn = getOLAPDataSource(sqlRequest.getProject()).getConnection();
 
-            if (sqlRequest instanceof PrepareSqlRequest) {
-                PreparedStatement preparedState = conn.prepareStatement(sql);
+                if (sqlRequest instanceof PrepareSqlRequest) {
+                    PreparedStatement preparedState = conn.prepareStatement(sql);
 
-                for (int i = 0; i < ((PrepareSqlRequest) sqlRequest).getParams().length; i++) {
-                    setParam(preparedState, i + 1, ((PrepareSqlRequest) sqlRequest).getParams()[i]);
+                    for (int i = 0; i < ((PrepareSqlRequest) sqlRequest).getParams().length; i++) {
+                        setParam(preparedState, i + 1, ((PrepareSqlRequest) sqlRequest).getParams()[i]);
+                    }
+
+                    resultSet = preparedState.executeQuery();
+                } else {
+                    stat = conn.createStatement();
+                    resultSet = stat.executeQuery(sql);
                 }
-
-                resultSet = preparedState.executeQuery();
-            } else {
-                stat = conn.createStatement();
-                resultSet = stat.executeQuery(sql);
-            }
+        		
+        	}
+        	catch (Exception exc) {// unsuccessful statement execution, retry with Hive on Spark
+        		try {
+        			Class.forName(driverName);
+        		} catch (ClassNotFoundException e) {
+        			// TODO Auto-generated catch block
+        			e.printStackTrace();
+        			System.exit(1);
+        		}
+        		
+        		// Configs for connection to HiveServer2
+        		String hiverServerUrl = "jdbc:hive2://temp-9375.lvs01.dev.ebayc3.com:10000/default";
+        		String hiveUserName = "aseempatni";
+        		String hivePassword = "";
+        		
+        		conn = DriverManager.getConnection(hiverServerUrl,hiveUserName,hivePassword);
+        		Statement stmt = conn.createStatement();
+        		logger.debug("Running query: " + sql);
+        		resultSet = stmt.executeQuery(sql);
+        	}
 
             ResultSetMetaData metaData = resultSet.getMetaData();
             int columnCount = metaData.getColumnCount();
@@ -358,8 +383,11 @@ public class QueryService extends BasicService {
 
             List<String> oneRow = new LinkedList<String>();
 
+            logger.debug("EXECUTE");
+
             // fill in results
             while (resultSet.next()) {
+            	logger.debug(resultSet.getString(1));
                 for (int i = 0; i < columnCount; i++) {
                     oneRow.add((resultSet.getString(i + 1)));
                 }
